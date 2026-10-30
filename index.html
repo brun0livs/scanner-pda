@@ -132,7 +132,7 @@
     items.slice().reverse().forEach(it => {
       const i = items.indexOf(it);
       const li = document.createElement('li');
-      li.innerHTML = `<div class="code">${esc(it.code).replace(/\x1d/g, '[GS]')}<div class="meta">${esc(it.format)} · ${new Date(it.last).toLocaleTimeString('pt-PT')}</div>${infoHtml(it.code)}</div>
+      li.innerHTML = `<div class="code">${esc(legivel(it.code))}<div class="meta">${esc(it.format)} · ${new Date(it.last).toLocaleTimeString('pt-PT')}</div>${infoHtml(it.code)}</div>
         <div class="qty"><button data-a="minus" data-i="${i}">−</button><b>${it.qty}</b><button data-a="plus" data-i="${i}">+</button></div>
         <button class="del" data-a="del" data-i="${i}">✕</button>`;
       ul.appendChild(li);
@@ -161,7 +161,7 @@
     if (found && $('optQty').checked) { found.qty++; found.last = now; }
     else items.push({ code, format, qty: 1, first: now, last: now });
 
-    $('lastVal').textContent = code.replace(/\x1d/g, '[GS]'); $('lastFmt').innerHTML = esc(format) + infoHtml(code);
+    $('lastVal').textContent = legivel(code); $('lastFmt').innerHTML = esc(format) + infoHtml(code);
     const v = $('viewer'); v.classList.add('hit'); setTimeout(() => v.classList.remove('hit'), 300);
     beep(); vibrate(); save(); render();
     if (!$('optContinuous').checked && running) stopScan();
@@ -233,6 +233,15 @@
         if (!a || a.cod !== m[1]) return null;
         pares.push([a, m[2]]);
       }
+    } else if (s.includes('\u0089')) {
+      // campos separados por \u0088 (com um byte antes, conforme a codificação) e AI/valor separados por \u0089
+      for (const seg of s.split(/[è�]?\u0088/)) {
+        if (!seg) continue;
+        const k = seg.indexOf('\u0089'), ai = seg.slice(0, k);
+        const a = k < 0 ? null : aiEm(ai, 0);
+        if (!a || a.cod !== ai) return null;
+        pares.push([a, seg.slice(k + 1)]);
+      }
     } else {
       for (let i = 0; i < s.length;) {
         if (s[i] === GS) { i++; continue; }   // separador a mais, depois de um campo de tamanho fixo
@@ -242,13 +251,13 @@
         let valor, prox;
         if (a.def.len) { valor = s.substr(ini, a.def.len); prox = ini + a.def.len; }
         else { const g = s.indexOf(GS, ini); valor = s.slice(ini, g < 0 ? s.length : g); prox = g < 0 ? s.length : g + 1; }
-        if (!valor || (a.def.len && (valor.length !== a.def.len || !/^\d+$/.test(valor))) || (a.def.max && valor.length > a.def.max)) return null;
         pares.push([a, valor]);
         i = prox;
       }
     }
     // um único AI de tamanho variável é demasiado vago para ser GS1 (ex.: "1025")
     if (!pares.length || (pares.length < 2 && !s.startsWith('(') && !pares[0][0].def.len)) return null;
+    if (pares.some(([a, valor]) => !valor || (a.def.len && (valor.length !== a.def.len || !/^\d+$/.test(valor))) || (a.def.max && valor.length > a.def.max))) return null;
     return pares.map(([a, valor]) => ({ nome: a.def.nome, valor: formatarGs1(a.def, valor, a.dec) }));
   }
   // Informação para códigos que não são GS1
@@ -265,6 +274,9 @@
     const linhas = gs1 ? gs1.map(x => `${esc(x.nome)}: <b>${esc(x.valor)}</b>`) : infoOutros(codigo);
     return linhas.map(l => `<div class="info">${l}</div>`).join('');
   }
+
+  // Texto para mostrar: separadores (GS ou os bytes que alguns QR usam) aparecem como [GS]
+  function legivel(texto) { return texto.replace(/[è�]?\u0088|\x1d/g, '[GS]').replace(/\u0089/g, ' '); }
 
   // ---------- Câmara ----------
   function fmtName(r) { try { return r.result.format.formatName.replace(/_/g, ' '); } catch { return 'CÓDIGO'; } }
