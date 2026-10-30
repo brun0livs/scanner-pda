@@ -35,6 +35,8 @@
   li { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:6px; display:flex; align-items:center; gap:10px; }
   li .code { flex:1; word-break:break-all; font-weight:600; }
   li .meta { font-size:12px; color:var(--mut); font-weight:400; }
+  .info { font-size:13px; color:var(--mut); margin-top:2px; }
+  .info b { color:var(--txt); font-weight:600; }
   li .qty { display:flex; align-items:center; gap:6px; }
   li .qty button { min-width:32px; padding:4px 0; flex:none; width:32px; }
   li .del { background:none; border:0; color:var(--err); font-size:18px; min-width:0; flex:none; width:32px; padding:0; }
@@ -130,7 +132,7 @@
     items.slice().reverse().forEach(it => {
       const i = items.indexOf(it);
       const li = document.createElement('li');
-      li.innerHTML = `<div class="code">${esc(it.code).replace(/\x1d/g, '[GS]')}<div class="meta">${esc(it.format)} · ${new Date(it.last).toLocaleTimeString('pt-PT')}</div></div>
+      li.innerHTML = `<div class="code">${esc(it.code).replace(/\x1d/g, '[GS]')}<div class="meta">${esc(it.format)} · ${new Date(it.last).toLocaleTimeString('pt-PT')}</div>${infoHtml(it.code)}</div>
         <div class="qty"><button data-a="minus" data-i="${i}">−</button><b>${it.qty}</b><button data-a="plus" data-i="${i}">+</button></div>
         <button class="del" data-a="del" data-i="${i}">✕</button>`;
       ul.appendChild(li);
@@ -159,10 +161,109 @@
     if (found && $('optQty').checked) { found.qty++; found.last = now; }
     else items.push({ code, format, qty: 1, first: now, last: now });
 
-    $('lastVal').textContent = code.replace(/\x1d/g, '[GS]'); $('lastFmt').textContent = format;
+    $('lastVal').textContent = code.replace(/\x1d/g, '[GS]'); $('lastFmt').innerHTML = esc(format) + infoHtml(code);
     const v = $('viewer'); v.classList.add('hit'); setTimeout(() => v.classList.remove('hit'), 300);
     beep(); vibrate(); save(); render();
     if (!$('optContinuous').checked && running) stopScan();
+  }
+
+  // ---------- Interpretação do código ----------
+  const GS = '\x1d';   // separador de campos GS1 (aparece como caractere invisível)
+  // Identificadores de aplicação GS1: len = tamanho fixo, max = tamanho máximo (termina em GS)
+  const GS1_AI = {
+    '00': { nome: 'SSCC (palete/caixa)', len: 18 },
+    '01': { nome: 'GTIN (produto)', len: 14, tipo: 'gtin' },
+    '02': { nome: 'GTIN dos artigos contidos', len: 14, tipo: 'gtin' },
+    '10': { nome: 'Lote', max: 20 },
+    '11': { nome: 'Data de produção', len: 6, tipo: 'data' },
+    '13': { nome: 'Data de embalamento', len: 6, tipo: 'data' },
+    '15': { nome: 'Consumir de preferência antes de', len: 6, tipo: 'data' },
+    '16': { nome: 'Data limite de venda', len: 6, tipo: 'data' },
+    '17': { nome: 'Validade', len: 6, tipo: 'data' },
+    '20': { nome: 'Variante do produto', len: 2 },
+    '21': { nome: 'Número de série', max: 20 },
+    '240': { nome: 'Identificação adicional do produto', max: 30 },
+    '241': { nome: 'Número de cliente do produto', max: 30 },
+    '250': { nome: 'Número de série secundário', max: 30 },
+    '30': { nome: 'Quantidade', max: 8 },
+    '37': { nome: 'Número de unidades comerciais', max: 8 },
+    '400': { nome: 'Número de encomenda', max: 30 },
+    '410': { nome: 'Entregar a (GLN)', len: 13 },
+    '414': { nome: 'Localização (GLN)', len: 13 },
+    '420': { nome: 'Código postal de entrega', max: 20 },
+    '8004': { nome: 'Identificador de ativo (GIAI)', max: 30 },
+    '8018': { nome: 'Identificador de relação de serviço (GSRN)', len: 18 },
+    '8200': { nome: 'URL', max: 70 },
+    '90': { nome: 'Informação interna', max: 30 }
+  };
+  // Medidas: o 4.º dígito do AI indica as casas decimais (ex.: 3102 = peso líquido com 2 decimais)
+  const GS1_MEDIDA = { '310': 'Peso líquido (kg)', '311': 'Comprimento (m)', '312': 'Largura (m)', '313': 'Altura (m)', '315': 'Volume líquido (l)', '320': 'Peso líquido (lb)', '330': 'Peso bruto logístico (kg)' };
+
+  function gtinOk(c) {
+    const dig = +c.slice(-1), soma = c.slice(0, -1).split('').reverse().reduce((s, x, i) => s + x * (i % 2 ? 1 : 3), 0);
+    return (10 - soma % 10) % 10 === dig;
+  }
+  // Identifica o AI que começa na posição i (ex.: '240', '3100', '17')
+  function aiEm(s, i) {
+    const q = s.substr(i, 4), t = s.substr(i, 3);
+    if (GS1_AI[q]) return { cod: q, def: GS1_AI[q] };
+    if (GS1_MEDIDA[t] && /\d/.test(s[i + 3] || '')) return { cod: q, def: { nome: GS1_MEDIDA[t], len: 6 }, dec: +s[i + 3] };
+    if (GS1_AI[t]) return { cod: t, def: GS1_AI[t] };
+    if (GS1_AI[q.slice(0, 2)]) return { cod: q.slice(0, 2), def: GS1_AI[q.slice(0, 2)] };
+    return null;
+  }
+  function formatarGs1(def, valor, dec) {
+    if (def.tipo === 'data') {
+      const ano = 2000 + +valor.slice(0, 2), mes = +valor.slice(2, 4), dia = valor.slice(4, 6);
+      if (mes < 1 || mes > 12) return valor;
+      const d = dia === '00' ? new Date(ano, mes, 0).getDate() : +dia;   // dia 00 = último dia do mês
+      return `${String(d).padStart(2, '0')}/${valor.slice(2, 4)}/${ano}`;
+    }
+    if (def.tipo === 'gtin') return `${valor} (dígito de controlo ${gtinOk(valor) ? 'OK' : 'inválido'})`;
+    if (dec !== undefined) return (Number(valor) / 10 ** dec).toFixed(dec);
+    return valor;
+  }
+  // Lê um código GS1 (com separadores GS ou com AIs entre parênteses). Devolve null se não for GS1.
+  function lerGs1(texto) {
+    const s = texto.replace(/^\][A-Za-z]\d/, '');   // identificador de simbologia, ex.: ]C1 (GS1-128)
+    const pares = [];
+    if (s.startsWith('(')) {
+      for (const m of s.matchAll(/\((\d{2,4})\)([^(]*)/g)) {
+        const a = aiEm(m[1], 0);
+        if (!a || a.cod !== m[1]) return null;
+        pares.push([a, m[2]]);
+      }
+    } else {
+      for (let i = 0; i < s.length;) {
+        if (s[i] === GS) { i++; continue; }   // separador a mais, depois de um campo de tamanho fixo
+        const a = aiEm(s, i);
+        if (!a) return null;
+        const ini = i + a.cod.length;
+        let valor, prox;
+        if (a.def.len) { valor = s.substr(ini, a.def.len); prox = ini + a.def.len; }
+        else { const g = s.indexOf(GS, ini); valor = s.slice(ini, g < 0 ? s.length : g); prox = g < 0 ? s.length : g + 1; }
+        if (!valor || (a.def.len && (valor.length !== a.def.len || !/^\d+$/.test(valor))) || (a.def.max && valor.length > a.def.max)) return null;
+        pares.push([a, valor]);
+        i = prox;
+      }
+    }
+    // um único AI de tamanho variável é demasiado vago para ser GS1 (ex.: "1025")
+    if (!pares.length || (pares.length < 2 && !s.startsWith('(') && !pares[0][0].def.len)) return null;
+    return pares.map(([a, valor]) => ({ nome: a.def.nome, valor: formatarGs1(a.def, valor, a.dec) }));
+  }
+  // Informação para códigos que não são GS1
+  function infoOutros(c) {
+    const linhas = [], num = /^\d+$/.test(c);
+    if (/^https?:\/\//i.test(c)) { try { linhas.push(`Ligação para: <b>${esc(new URL(c).hostname)}</b>`); } catch {} }
+    if (num && [8, 12, 13, 14].includes(c.length)) linhas.push(`GTIN: <b>dígito de controlo ${gtinOk(c) ? 'OK' : 'inválido'}</b>`);
+    linhas.push(`${c.length} caracteres · ${num ? 'numérico' : 'alfanumérico'}`);
+    return linhas;
+  }
+  // Linhas de informação (HTML) mostradas por baixo de cada leitura
+  function infoHtml(codigo) {
+    const gs1 = lerGs1(codigo);
+    const linhas = gs1 ? gs1.map(x => `${esc(x.nome)}: <b>${esc(x.valor)}</b>`) : infoOutros(codigo);
+    return linhas.map(l => `<div class="info">${l}</div>`).join('');
   }
 
   // ---------- Câmara ----------
