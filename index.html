@@ -87,7 +87,7 @@
 
   <div class="row">
     <button id="btnCopy">📋 Copiar</button>
-    <button id="btnCsv">⬇ CSV</button>
+    <button id="btnCsv">⬇ Excel</button>
     <button class="danger" id="btnClear">🗑 Limpar</button>
   </div>
 </main>
@@ -380,8 +380,24 @@
   });
 
   // ---------- Exportar ----------
-  const toCsv = () => 'codigo;formato;quantidade;primeira_leitura;ultima_leitura\n' +
-    items.map(x => [x.code.replace(/;/g, ','), x.format, x.qty, new Date(x.first).toISOString(), new Date(x.last).toISOString()].join(';')).join('\n');
+  // Abre diretamente no Excel (separador ;). Uma coluna por campo GS1 encontrado nas leituras.
+  const csvCampo = s => `"${String(s).replace(/"/g, '""')}"`;
+  const toCsv = () => {
+    const linhas = items.map(x => {
+      const gs1 = lerGs1(x.code) || [];
+      const info = gs1.length ? '' : infoOutros(x.code).map(l => l.replace(/<[^>]+>/g, '')).join(' | ');
+      return { x, gs1, info };
+    });
+    const nomes = [];
+    linhas.forEach(l => l.gs1.forEach(c => { if (!nomes.includes(c.nome)) nomes.push(c.nome); }));
+    const cabecalho = ['codigo', 'formato', 'quantidade', 'primeira_leitura', 'ultima_leitura', 'info', ...nomes];
+    const data = t => new Date(t).toLocaleString('pt-PT');
+    const corpo = linhas.map(({ x, gs1, info }) => {
+      const campos = Object.fromEntries(gs1.map(c => [c.nome, c.valor]));
+      return [legivel(x.code), x.format, x.qty, data(x.first), data(x.last), info, ...nomes.map(n => campos[n] ?? '')].map(csvCampo).join(';');
+    });
+    return [cabecalho.map(csvCampo).join(';'), ...corpo].join('\n');
+  };
   $('btnCsv').onclick = () => {
     if (!items.length) return toast('Nada para exportar');
     const blob = new Blob(['﻿' + toCsv()], { type: 'text/csv;charset=utf-8' });
