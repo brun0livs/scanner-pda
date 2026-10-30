@@ -130,7 +130,7 @@
     items.slice().reverse().forEach(it => {
       const i = items.indexOf(it);
       const li = document.createElement('li');
-      li.innerHTML = `<div class="code">${esc(it.code)}<div class="meta">${esc(it.format)} · ${new Date(it.last).toLocaleTimeString('pt-PT')}</div></div>
+      li.innerHTML = `<div class="code">${esc(it.code).replace(/\x1d/g, '[GS]')}<div class="meta">${esc(it.format)} · ${new Date(it.last).toLocaleTimeString('pt-PT')}</div></div>
         <div class="qty"><button data-a="minus" data-i="${i}">−</button><b>${it.qty}</b><button data-a="plus" data-i="${i}">+</button></div>
         <button class="del" data-a="del" data-i="${i}">✕</button>`;
       ul.appendChild(li);
@@ -159,7 +159,7 @@
     if (found && $('optQty').checked) { found.qty++; found.last = now; }
     else items.push({ code, format, qty: 1, first: now, last: now });
 
-    $('lastVal').textContent = code; $('lastFmt').textContent = format;
+    $('lastVal').textContent = code.replace(/\x1d/g, '[GS]'); $('lastFmt').textContent = format;
     const v = $('viewer'); v.classList.add('hit'); setTimeout(() => v.classList.remove('hit'), 300);
     beep(); vibrate(); save(); render();
     if (!$('optContinuous').checked && running) stopScan();
